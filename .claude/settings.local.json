@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(lake build)",
+      "Bash(lake env lean --run:*)",
+      "Bash(lake build:*)",
+      "Bash(/Users/kaito2/tmp/lean-pq/.lake/build/bin/tests:*)",
+      "Bash(.lake/build/bin/tests:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}
