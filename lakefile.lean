@@ -6,7 +6,7 @@ package «lean-pq» where
   version := v!"0.1.0"
   moreLinkArgs := #[
     "-lssl", "-lcrypto",
-    "-L/opt/homebrew/opt/openssl/lib"         -- macOS (Homebrew)
+    "-L/opt/homebrew/opt/openssl/lib"
   ]
 
 target ffi.o pkg : FilePath := do
