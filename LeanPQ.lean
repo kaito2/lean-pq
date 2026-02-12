@@ -1,7 +1,13 @@
 import LeanPQ.ByteUtils
 import LeanPQ.Protocol
 import LeanPQ.Auth.MD5
+import LeanPQ.Auth.SHA256
+import LeanPQ.Auth.HMAC
+import LeanPQ.Auth.Base64
+import LeanPQ.Auth.SCRAM
 import LeanPQ.Types
+import LeanPQ.Error
+import LeanPQ.SSL
 import LeanPQ.Result
 import LeanPQ.Connection
 import LeanPQ.Query

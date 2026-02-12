@@ -22,6 +22,8 @@ inductive FrontendMsg where
   | execute (portal : String) (maxRows : UInt32)
   | sync
   | terminate
+  | saslInitialResponse (mechanism : String) (data : ByteArray)
+  | saslResponse (data : ByteArray)
 
 -- ============================================================
 -- Backend messages (server → client)
@@ -48,6 +50,9 @@ inductive BackendMsg where
   | commandComplete (tag : String)
   | errorResponse (fields : List (Char × String))
   | noticeResponse (fields : List (Char × String))
+  | authSASL (mechanisms : Array String)
+  | authSASLContinue (data : ByteArray)
+  | authSASLFinal (data : ByteArray)
   | emptyQueryResponse
   | parseComplete
   | bindComplete
@@ -136,6 +141,14 @@ def FrontendMsg.serialize : FrontendMsg → ByteArray
     buildTaggedMsg 'S'.val.toUInt8 ByteArray.empty
   | .terminate =>
     buildTaggedMsg 'X'.val.toUInt8 ByteArray.empty
+  | .saslInitialResponse mechanism data =>
+    let body := ByteArray.empty
+    let body := putCString body mechanism
+    let body := putInt32BE body data.size.toInt32
+    let body := body.append data
+    buildTaggedMsg 'p'.val.toUInt8 body
+  | .saslResponse data =>
+    buildTaggedMsg 'p'.val.toUInt8 data
 
 -- ============================================================
 -- BackendMsg.parse
@@ -209,6 +222,23 @@ def BackendMsg.parse (tag : UInt8) (payload : ByteArray) : BackendMsg :=
     else if authType == 5 then
       let (salt, _) := getBytes payload 4 4
       .authMD5Password salt
+    else if authType == 10 then
+      -- AuthenticationSASL: list of mechanism names (null-terminated, empty string terminates)
+      let mechanisms := Id.run do
+        let mut mechs : Array String := #[]
+        let mut off := 4
+        for _ in [:20] do
+          if off >= payload.size then return mechs
+          let (s, newOff) := getCString payload off
+          if s.isEmpty then return mechs
+          mechs := mechs.push s
+          off := newOff
+        return mechs
+      .authSASL mechanisms
+    else if authType == 11 then
+      .authSASLContinue (payload.extract 4 payload.size)
+    else if authType == 12 then
+      .authSASLFinal (payload.extract 4 payload.size)
     else .unknown tag payload
   | 83 => -- 'S' ParameterStatus
     let (name, off) := getCString payload 0
