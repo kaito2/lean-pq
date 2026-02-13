@@ -4,6 +4,7 @@ import LeanPQ.Auth.MD5
 import LeanPQ.Auth.SCRAM
 import LeanPQ.Error
 import LeanPQ.SSL
+import LeanTLS
 import Std.Internal.Async
 
 open LeanPQ.ByteUtils
@@ -14,12 +15,12 @@ open Std.Net
 namespace LeanPQ
 
 -- ============================================================
--- Transport abstraction (plain TCP or SSL)
+-- Transport abstraction (plain TCP or SSL via lean-tls)
 -- ============================================================
 
 inductive Transport where
   | plain (sock : TCP.Socket.Client)
-  | ssl (sock : TCP.Socket.Client) (sslConn : SSL.SSLConnection)
+  | ssl (sock : TCP.Socket.Client) (tlsConn : LeanTLS.TlsConnection)
 
 structure ConnConfig where
   host : String := "localhost"
@@ -28,6 +29,7 @@ structure ConnConfig where
   database : String := ""
   password : String := ""
   sslMode : SSL.SSLMode := .disable
+  sslRootCert : Option String := none
   deriving Repr
 
 structure Connection where
@@ -37,13 +39,32 @@ structure Connection where
 namespace Connection
 
 -- ============================================================
+-- IOStream adapter for TCP.Socket.Client
+-- ============================================================
+
+private def mkIOStream (sock : TCP.Socket.Client) : LeanTLS.IOStream := {
+  read := fun n => do
+    let mut buf := ByteArray.empty
+    let mut remaining := n
+    while remaining > 0 do
+      match ← (sock.recv? remaining.toUInt64).block with
+      | none => PgError.toIO .connectionClosed
+      | some chunk =>
+        if chunk.size == 0 then PgError.toIO .connectionClosed
+        buf := buf ++ chunk
+        remaining := remaining - chunk.size
+    return buf
+  write := fun data => (sock.send data).block
+}
+
+-- ============================================================
 -- Low-level send/recv over Transport
 -- ============================================================
 
 private def sendBytes (conn : Connection) (data : ByteArray) : IO Unit :=
   match conn.transport with
   | .plain sock => (sock.send data).block
-  | .ssl _ sslConn => sslConn.send data
+  | .ssl _ tlsConn => tlsConn.send data
 
 def sendMsg (conn : Connection) (msg : FrontendMsg) : IO Unit :=
   conn.sendBytes msg.serialize
@@ -59,8 +80,8 @@ def recvExact (conn : Connection) (n : Nat) : IO ByteArray := do
         | some chunk =>
           if chunk.size == 0 then PgError.toIO .connectionClosed
           pure chunk
-      | .ssl _ sslConn =>
-        match ← sslConn.recv remaining.toUInt64 with
+      | .ssl _ tlsConn =>
+        match ← tlsConn.recv remaining with
         | none => PgError.toIO .connectionClosed
         | some chunk =>
           if chunk.size == 0 then PgError.toIO .connectionClosed
@@ -138,16 +159,28 @@ private def handleAuth (conn : Connection) : IO Unit := do
   PgError.toIO (.protocolError "authentication: too many messages")
 
 -- ============================================================
--- SSL negotiation
+-- SSL negotiation (lean-tls)
 -- ============================================================
 
-@[extern "lean_pq_socket_fd"]
-private opaque socketFd : @& TCP.Socket.Client → IO UInt32
+private def sslModeToVerifyMode : SSL.SSLMode → LeanTLS.VerifyMode
+  | .disable    => .none
+  | .prefer     => .none
+  | .require    => .none
+  | .verifyCA   => .verifyCA
+  | .verifyFull => .verifyFull
 
-private def negotiateSSL (sock : TCP.Socket.Client) (mode : SSL.SSLMode) : IO Transport := do
-  match mode with
+private def loadCertsFromFile (path : String) : IO (Array LeanTLS.X509.X509Certificate) := do
+  let contents ← IO.FS.readFile path
+  let derCerts := LeanTLS.PEM.parseCertificates contents
+  let certs := derCerts.filterMap LeanTLS.X509.parseX509
+  if certs.isEmpty then
+    PgError.toIO (.sslError s!"no valid certificates found in {path}")
+  return certs
+
+private def negotiateSSL (sock : TCP.Socket.Client) (cfg : ConnConfig) : IO Transport := do
+  match cfg.sslMode with
   | .disable => return .plain sock
-  | _ =>
+  | mode =>
     -- Send SSLRequest
     (sock.send SSL.sslRequestMessage).block
     -- Read 1-byte response
@@ -157,15 +190,23 @@ private def negotiateSSL (sock : TCP.Socket.Client) (mode : SSL.SSLMode) : IO Tr
         if buf.size == 0 then PgError.toIO (.sslError "empty response to SSLRequest")
         pure (buf.get! 0)
     if SSL.isSSLAccepted resp then
-      -- Server accepted SSL, perform TLS handshake
-      let ctx ← SSL.SSLContext.mk
-      let fd ← socketFd sock
-      let sslConn ← ctx.connect fd
-      return .ssl sock sslConn
+      -- Server accepted SSL, perform TLS handshake via lean-tls
+      let stream := mkIOStream sock
+      let trustedCerts ← match cfg.sslRootCert with
+        | some path => loadCertsFromFile path
+        | none => pure #[]
+      let tlsConfig : LeanTLS.TlsConfig := {
+        serverName := cfg.host
+        verifyMode := sslModeToVerifyMode mode
+        trustedCerts := trustedCerts
+      }
+      let tlsConn ← LeanTLS.TlsConnection.connect stream cfg.host tlsConfig
+      return .ssl sock tlsConn
     else
       -- Server declined SSL
       match mode with
-      | .require => PgError.toIO (.sslError "server does not support SSL")
+      | .require | .verifyCA | .verifyFull =>
+        PgError.toIO (.sslError "server does not support SSL")
       | _ => return .plain sock
 
 -- ============================================================
@@ -183,7 +224,7 @@ def connect (cfg : ConnConfig) : IO Connection := do
     | .v6 addr => .v6 { addr, port := cfg.port }
   let sock ← TCP.Socket.Client.mk
   (sock.connect sockAddr).block
-  let transport ← negotiateSSL sock cfg.sslMode
+  let transport ← negotiateSSL sock cfg
   let conn : Connection := { transport, config := cfg }
   conn.sendMsg (.startup cfg.user db)
   handleAuth conn
@@ -193,8 +234,8 @@ def close (conn : Connection) : IO Unit := do
   conn.sendMsg .terminate
   match conn.transport with
   | .plain sock => (sock.shutdown).block
-  | .ssl sock sslConn =>
-    sslConn.shutdown
+  | .ssl sock tlsConn =>
+    tlsConn.shutdown
     (sock.shutdown).block
 
 end Connection

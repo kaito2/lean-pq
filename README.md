@@ -1,13 +1,14 @@
 # LeanPQ
 
-A pure Lean 4 PostgreSQL client library implementing the PostgreSQL wire protocol v3.
+A **100% pure Lean 4** PostgreSQL client library implementing the PostgreSQL wire protocol v3. No C FFI or external dependencies — TLS is provided by [lean-tls](https://github.com/kaito2/lean-tls).
 
 ## Features
 
 - PostgreSQL wire protocol v3
 - MD5 and cleartext password authentication
 - SCRAM-SHA-256 authentication (PostgreSQL 10+ default)
-- SSL/TLS encryption via OpenSSL FFI
+- SSL/TLS encryption via [lean-tls](https://github.com/kaito2/lean-tls) (pure Lean 4, no OpenSSL)
+- SSL modes: `disable`, `prefer`, `require`, `verifyCA`, `verifyFull`
 - Simple query protocol
 - Extended query protocol with parameterized queries
 - Type-safe result handling with `FromPg`/`ToPg` type classes
@@ -17,7 +18,6 @@ A pure Lean 4 PostgreSQL client library implementing the PostgreSQL wire protoco
 
 - Lean 4 v4.27.0 or later
 - Lake build system
-- OpenSSL (`libssl-dev` on Ubuntu, `brew install openssl` on macOS) for SSL/TLS support
 
 ## Installation
 
@@ -25,7 +25,7 @@ Add LeanPQ as a dependency in your `lakefile.lean`:
 
 ```lean
 require «lean-pq» from git
-  "https://github.com/YOUR_USERNAME/lean-pq" @ "main"
+  "https://github.com/kaito2/lean-pq" @ "v0.2.0"
 ```
 
 Then run:
@@ -49,7 +49,8 @@ def main : IO Unit := do
     user := "postgres"
     database := "mydb"
     password := "secret"
-    sslMode := .prefer  -- .disable, .prefer, or .require
+    sslMode := .prefer  -- .disable, .prefer, .require, .verifyCA, .verifyFull
+    sslRootCert := some "/path/to/ca.pem"  -- optional, for verifyCA/verifyFull
   }
 
   -- Simple query
@@ -89,7 +90,7 @@ def main : IO Unit := do
 | `Auth.HMAC` | HMAC-SHA-256 |
 | `Auth.Base64` | Base64 encode/decode |
 | `Auth.SCRAM` | SCRAM-SHA-256 client authentication |
-| `SSL` | SSL/TLS support via OpenSSL FFI |
+| `SSL` | SSL/TLS mode definitions and PG wire protocol helpers |
 | `Types` | PostgreSQL type OIDs and the `FromPg`/`ToPg` type classes |
 | `Connection` | Connection management and configuration |
 | `Query` | Simple and extended query execution |

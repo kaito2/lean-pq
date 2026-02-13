@@ -19,19 +19,6 @@ jobs:
           curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> $GITHUB_PATH
 
-      - name: Install OpenSSL dev headers
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev
-
-      - name: Link OpenSSL static libs into Lean toolchain sysroot
-        run: |
-          # Lean's bundled clang uses --sysroot, so the linker only searches
-          # within the toolchain directory.  Symlink the *static* (.a) archives
-          # instead of .so to avoid glibc version mismatches between the system
-          # OpenSSL shared libs and Lean's sysroot glibc.
-          LEAN_TOOLCHAIN="$(lean --print-prefix)"
-          ln -sf /usr/lib/x86_64-linux-gnu/libssl.a    "$LEAN_TOOLCHAIN/lib/"
-          ln -sf /usr/lib/x86_64-linux-gnu/libcrypto.a  "$LEAN_TOOLCHAIN/lib/"
-
       - name: Build library
         run: lake build
 
