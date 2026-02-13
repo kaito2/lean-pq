@@ -6,7 +6,7 @@ package «lean-pq» where
   version := v!"0.2.0"
 
 require «lean-tls» from git
-  "https://github.com/kaito2/lean-tls" @ "v0.3.0"
+  "https://github.com/kaito2/lean-tls" @ "v0.3.1"
 
 lean_lib «LeanPQ» where
   srcDir := "."
